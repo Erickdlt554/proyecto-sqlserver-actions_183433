@@ -1,0 +1,42 @@
+   name: Deploy SQL Server
+   on:
+     push:
+       branches: [main]
+     workflow_dispatch:
+
+   env:
+     ACCEPT_EULA: Y
+     MSSQL_PID: Developer
+     SA_PASSWORD: ${{ secrets.MSSQL_SA_PASSWORD }}
+
+   jobs:
+     deploy:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v4
+
+         - name: Iniciar SQL Server en Docker
+           run: |
+             docker run -d --name sqlserver \
+               -e ACCEPT_EULA=$ACCEPT_EULA \
+               -e MSSQL_PID=$MSSQL_PID \
+               -e MSSQL_SA_PASSWORD="$SA_PASSWORD" \
+               -p 1433:1433 \
+               mcr.microsoft.com/mssql/server:2022-latest
+
+         - name: Esperar a que esté listo
+           run: |
+             for i in $(seq 1 30); do
+               docker exec sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C -Q "SELECT 1" && exit 0
+               sleep 3
+             done
+             echo "SQL Server no arrancó"; docker logs sqlserver; exit 1
+
+         - name: Ejecutar scripts
+           run: |
+             docker cp sql sqlserver:/sql
+             for f in create_database create_tables create_procedure create_trigger test_data; do
+               echo "== $f.sql =="
+               docker exec sqlserver /opt/mssql-tools18/bin/sqlcmd \
+                 -S localhost -U sa -P "$SA_PASSWORD" -C -b -f 65001 -i /sql/$f.sql
+             done
