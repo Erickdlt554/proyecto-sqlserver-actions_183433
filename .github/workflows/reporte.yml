@@ -1,0 +1,43 @@
+   name: Reporte CSV
+   on:
+     schedule:
+       - cron: '0 6 * * *'
+     workflow_dispatch:
+
+   env:
+     ACCEPT_EULA: Y
+     MSSQL_PID: Developer
+     SA_PASSWORD: ${{ secrets.MSSQL_SA_PASSWORD }}
+
+   jobs:
+     reporte:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v4
+
+         - name: Up SQL Server y cargar scripts
+           run: |
+             docker run -d --name sqlserver -e ACCEPT_EULA=$ACCEPT_EULA -e MSSQL_PID=$MSSQL_PID \
+               -e MSSQL_SA_PASSWORD="$SA_PASSWORD" -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+             for i in $(seq 1 30); do
+               docker exec sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C -Q "SELECT 1" && break
+               sleep 3
+             done
+             docker cp sql sqlserver:/sql
+             for f in create_database create_tables create_procedure create_trigger test_data; do
+               docker exec sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C -b -f 65001 -i /sql/$f.sql > /dev/null
+             done
+
+         - name: Generar CSV
+           run: |
+             echo "VentaID,Producto,Cantidad,Fecha,Auditoria" > reporte_ventas.csv
+             docker exec sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C \
+               -d EmpresaDB -h -1 -W -s "," \
+               -Q "SET NOCOUNT ON; SELECT v.VentaID, v.Producto, v.Cantidad, CONVERT(VARCHAR(19), v.Fecha, 120), a.Mensaje FROM Ventas v LEFT JOIN AuditoriaVentas a ON a.VentaID = v.VentaID ORDER BY v.VentaID" \
+               >> reporte_ventas.csv
+             cat reporte_ventas.csv
+
+         - uses: actions/upload-artifact@v4
+           with:
+             name: reporte-ventas
+             path: reporte_ventas.csv
